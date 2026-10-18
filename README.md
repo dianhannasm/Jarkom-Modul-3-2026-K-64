@@ -9,6 +9,99 @@
 
 ## Modul 3
 
+## Ringkasan Topologi dan Alamat
+
+Topologi menggunakan satu router utama **Jichi** untuk menghubungkan jaringan DMZ, klien, dan pusat data. Server **Tengen** menangani DHCP, **Utahime** dan **Shoko** menangani DNS, sedangkan **Gojo** berperan sebagai reverse proxy layanan web/API. Pengujian benchmark dilakukan dari klien **Kusakabe**.
+
+| Node/jaringan | IP / rentang | Peran |
+|---|---|---|
+| Jichi `eth0` | `192.168.122.134/24` (DHCP NAT, pada bukti) | Akses internet |
+| Jichi `eth1` | `192.243.1.1/24` | Gateway DMZ |
+| Jichi `eth2` | `192.243.2.1/24` | Gateway Network 2 |
+| Jichi `eth3` | `192.243.3.1/24` | Gateway Network 3 |
+| Jichi `eth4` | `192.243.4.1/24` | Gateway Network 4 |
+| Tengen | `192.243.4.10/24` | DHCP server |
+| Utahime | `192.243.1.2/24` | DNS master |
+| Shoko | `192.243.1.3/24` | DNS slave |
+| Gojo | `192.243.1.4/24` | Nginx reverse proxy |
+| Kusakabe | IP DHCP di Network 3 | Klien benchmark dan verifikasi |
+
+Domain yang digunakan adalah **`jujutsu.k64.com`**. Pada klien, DNS yang dikonfigurasi pada tahap akhir adalah `192.243.1.2` dan `192.243.1.3` dengan search domain `k64.com`.
+
+---
+
+## Soal 1 — Konfigurasi Routing dan Koneksi Antarsubnet
+
+### Tujuan
+
+Mengonfigurasi jaringan awal setiap node dan router Jichi agar antarjaringan saling terhubung serta dapat mengakses internet melalui NAT GNS3.
+
+### Implementasi
+
+Pada Jichi, antarmuka `eth0` memperoleh IP dari jaringan NAT, sedangkan `eth1`–`eth4` menjadi gateway untuk empat segmen internal. *IP forwarding* diaktifkan untuk memungkinkan paket diteruskan antarsubnet. NAT masquerading diterapkan pada antarmuka keluar `eth0` agar node internal dapat mengakses internet.
+
+Perintah verifikasi yang digunakan:
+
+```bash
+ip -br -4 addr
+ip route
+cat /proc/sys/net/ipv4/ip_forward
+iptables -t nat -L POSTROUTING -n -v
+ping -c 4 8.8.8.8
+```
+
+Konfigurasi jaringan masing-masing server menggunakan script `/root/soal_1.sh`. Contohnya Tengen pada `192.243.4.10/24` dapat menghubungi gateway `192.243.4.1`, sementara Utahime berhasil mengakses internet.
+
+### Hasil dan analisis
+
+Dari pengujian Jichi, terlihat seluruh antarmuka internal memiliki alamat sesuai subnet dan *default route* mengarah ke `192.168.122.1`. Nilai `ip_forward` adalah `1` dan tabel NAT memuat aturan `MASQUERADE` melalui `eth0`. Ping ke `8.8.8.8` berhasil tanpa kehilangan paket. Konektivitas Tengen ke gateway serta konektivitas internet Utahime juga berhasil.
+
+![Gambar 1.1 — Verifikasi forwarding, NAT, dan koneksi internet Jichi](asset/1_1.png)
+
+*Gambar 1.1. Status IP forwarding, NAT masquerade, serta ping internet pada Jichi.*
+
+![Gambar 1.2 — Hasil script routing dan tabel rute Jichi](asset/1_2.png)
+
+*Gambar 1.2. Antarmuka Jichi, routing table, dan konfigurasi NAT setelah menjalankan script Soal 1.*
+
+![Gambar 1.3 — Pengujian Tengen dan Utahime](asset/1_3.png)
+
+*Gambar 1.3. Verifikasi alamat Tengen, koneksi gateway, dan akses internet Utahime.*
+
+**Kesimpulan:** Routing internal, akses internet, dan NAT di Jichi berhasil diterapkan serta diverifikasi.
+
+---
+
+## Soal 2 — Konfigurasi Awal DHCP Server pada Tengen
+
+### Tujuan
+
+Memasang dan mengonfigurasi layanan DHCP pada Tengen agar klien di jaringan terkait dapat menerima IP secara otomatis.
+
+### Implementasi
+
+Server DHCP dijalankan pada **Tengen** (`192.243.4.10`). Konfigurasi awal ditulis di `/etc/dhcp/dhcpd.conf`, kemudian validasi dilakukan menggunakan:
+
+```bash
+dhcpd -4 -t -cf /etc/dhcp/dhcpd.conf
+service isc-dhcp-server status
+cat /etc/dhcp/dhcpd.conf
+```
+
+Pada bukti tahap awal, Tengen telah mendefinisikan subnet Network 4 sebagai subnet lokal tanpa *pool*, serta pool awal pada Network 2 dan Network 3. Rentang dan opsi dari konfigurasi awal ini **masih mengalami penyesuaian dalam soal-soal DHCP berikutnya**, sehingga tidak digunakan sebagai acuan akhir pembagian kelas atau lease klien.
+
+### Hasil dan analisis
+
+Pemeriksaan sintaks `dhcpd -4 -t` tidak menampilkan kesalahan konfigurasi. Status layanan menunjukkan `dhcpd is running`, menandakan server DHCP berhasil diaktifkan.
+
+![Gambar 2.1 — Validasi dan status DHCP Tengen](asset/2_1.png)
+
+*Gambar 2.1. Konfigurasi awal subnet dan pool, validasi syntax DHCP, serta status DHCP server yang berjalan.*
+
+**Kesimpulan:** Layanan DHCP pada Tengen berhasil dipasang dan dijalankan sebagai dasar distribusi alamat IP klien.
+
+---
+
 ## Soal 3 — DHCP Relay
 
 ### Penjelasan
@@ -250,6 +343,301 @@ Kugisaki harus memperoleh `192.243.3.99` secara konsisten. Hasil tersebut membuk
 ![Soal 6](asset/06-1.png)  
 ![Soal 6](asset/06-2.png)  
 ![Soal 6](asset/06-3.png)  
+
+---
+
+## Soal 7 — Verifikasi DHCP Client pada Network 2 dan Network 3
+
+### Tujuan
+
+Memverifikasi bahwa para klien menerima alamat IP, subnet mask, gateway, serta DNS sesuai kebijakan DHCP yang telah disiapkan.
+
+### Implementasi
+
+Pada klien berbasis Alpine, pembaruan lease DHCP dilakukan dengan `udhcpc`. Pemeriksaan yang dilakukan mencakup:
+
+```sh
+udhcpc -i eth0 -n -q
+ip -4 addr show eth0
+ip route
+cat /etc/resolv.conf
+nslookup ns1.jujutsu.k64.com 192.243.1.2
+nslookup ns1.jujutsu.k64.com 192.243.1.3
+```
+
+Pemeriksaan dilakukan pada delapan klien: Itadori, Fushiguro, Zenin, Okkotsu, Ino, Kusakabe, Miwa, dan Kugisaki.
+
+### Hasil verifikasi
+
+Berikut adalah contoh hasil alamat yang tampak dalam screenshot verifikasi. IP dinamis dapat berbeda setelah lease diperbarui.
+
+| Klien | IP pada bukti | Gateway | Keterangan |
+|---|---|---|---|
+| Itadori | `192.243.2.10` | `192.243.2.1` | Pool developer |
+| Fushiguro | `192.243.2.11` | `192.243.2.1` | Pool developer |
+| Zenin | `192.243.2.70` | `192.243.2.1` | Pool support |
+| Okkotsu | `192.243.2.71` | `192.243.2.1` | Pool support |
+| Ino | `192.243.3.11` | `192.243.3.1` | Lease singkat (1800 detik) |
+| Kusakabe | `192.243.3.10` | `192.243.3.1` | Lease singkat; alamat yang terlihat pada bukti |
+| Miwa | `192.243.3.100` | `192.243.3.1` | Lease panjang (43200 detik pada konfigurasi) |
+| Kugisaki | `192.243.3.99` | `192.243.3.1` | Reservasi DHCP berdasarkan MAC |
+
+Semua klien menggunakan mask `/24` dan DNS `192.243.1.2` serta `192.243.1.3`. Hasil `nslookup` pada kedua DNS mengarah ke record `ns1.jujutsu.k64.com` dengan alamat `192.243.1.2`.
+
+![Gambar 7.1 — DHCP dan DNS pada beberapa klien](asset/7_1.png)
+
+*Gambar 7.1. Contoh perolehan lease DHCP dan pemeriksaan DNS Fushiguro, Zenin, Okkotsu, dan Ino.*
+
+![Gambar 7.2 — Verifikasi klien lainnya](asset/7_2.png)
+
+*Gambar 7.2. Verifikasi alamat serta resolusi DNS Itadori, Miwa, Kugisaki, dan Kusakabe.*
+
+![Gambar 7.3 — IP, route, dan resolv.conf klien kelompok pertama](asset/7_3.png)
+
+*Gambar 7.3. Pemeriksaan konfigurasi jaringan klien Network 2 serta Ino.*
+
+![Gambar 7.4 — IP, route, dan resolv.conf klien kelompok kedua](asset/7_4.png)
+
+*Gambar 7.4. Pemeriksaan konfigurasi Kugisaki, Kusakabe, dan Miwa.*
+
+**Kesimpulan:** Pembagian IP DHCP, gateway, DNS, serta kebijakan IP tetap untuk Kugisaki telah terverifikasi pada klien yang diuji.
+
+---
+
+## Soal 8 — Analisis Proses DHCP dengan Packet Capture
+
+### Tujuan
+
+Mengamati alur pertukaran paket DHCP menggunakan `tcpdump`, mengidentifikasi tahapan **DORA** (*Discover, Offer, Request, Acknowledge*), dan memeriksa informasi jaringan yang dikirimkan server.
+
+### Implementasi
+
+Paket DHCP direkam dari sisi Tengen dan disimpan sebagai `/root/soal_8.pcap`. Berkas capture dibaca dengan `tcpdump` untuk menampilkan jenis pesan DHCP dan *options* relevan.
+
+Contoh perintah analisis yang digunakan:
+
+```bash
+tcpdump -nn -vvv -r /root/soal_8.pcap 2>/dev/null | grep 'DHCP-Message'
+tcpdump -nn -vvv -r /root/soal_8.pcap 2>/dev/null | grep -E 'Gateway-IP|Your-IP|Server-ID|Lease-Time|Default-Gateway|Domain-Name-Server|DHCP-Message'
+```
+
+### Hasil dan analisis
+
+Capture memperlihatkan urutan lengkap **Discover → Offer → Request → ACK** untuk klien **Ino**. DHCP Server teridentifikasi sebagai `192.243.4.10`, sedangkan alamat relai (*gateway IP / giaddr*) menunjukkan `192.243.3.1`. Klien memperoleh `192.243.3.11` dengan lease `1800` detik, gateway `192.243.3.1`, dan DNS `192.243.1.2` serta `192.243.1.3`.
+
+| Field DHCP | Nilai hasil pengamatan |
+|---|---|
+| DHCP Server ID | `192.243.4.10` |
+| Relay/Gateway IP | `192.243.3.1` |
+| Your IP Address | `192.243.3.11` |
+| Lease Time | `1800` detik |
+| Default Gateway | `192.243.3.1` |
+| DNS Server | `192.243.1.2`, `192.243.1.3` |
+
+![Gambar 8.1 — Urutan DORA](asset/8_1.png)
+
+*Gambar 8.1. Empat tahapan pesan DHCP hasil packet capture.*
+
+![Gambar 8.2 — Informasi lease dan DHCP options](asset/8_2.png)
+
+*Gambar 8.2. Server ID, alamat klien, IP relay, gateway, DNS, serta lease time dalam paket DHCP.*
+
+**Kesimpulan:** DHCP DORA berhasil diamati secara lengkap dan data option sesuai dengan konfigurasi jaringan klien.
+
+---
+
+## Soal 9 — Troubleshooting Kegagalan DHCP Relay
+
+### Tujuan
+
+Membuktikan pengaruh layanan DHCP Relay Jichi terhadap kemampuan klien yang berbeda subnet dari Tengen untuk memperoleh lease DHCP.
+
+### Implementasi
+
+Pengujian dilakukan dengan menghentikan relay di Jichi lalu menghapus sementara IP serta default route Ino agar klien melakukan permintaan DHCP baru. Ketika relay tidak aktif, permintaan berulang dilakukan dengan `udhcpc`.
+
+```bash
+# Jichi: kendalikan relay
+bash /root/soal_9.sh stop
+# Ino: lepaskan alamat dan minta lease baru
+ip -4 addr flush dev eth0
+ip -4 route del default dev eth0 2>/dev/null || true
+udhcpc -i eth0 -n -q -t 3 -T 2
+```
+
+Setelah simulasi gagal, layanan DHCP Relay dipulihkan:
+
+```bash
+# Jichi
+bash /root/soal_9.sh start
+# Ino
+udhcpc -i eth0 -n -q
+```
+
+### Hasil dan analisis
+
+Pada kondisi relay berhenti, permintaan DHCP dari Ino menghasilkan **`no lease, failing`**. Ketika relay Jichi dinyalakan kembali, server `192.243.4.10` memberikan lease `192.243.3.11` selama `1800` detik. Gateway kembali terisi `192.243.3.1`.
+
+Kegagalan tersebut konsisten dengan fungsi DHCP Relay: broadcast DHCP dari Network 3 tidak otomatis menyeberangi router tanpa bantuan relay.
+
+![Gambar 9.1 — Lease Ino sebelum simulasi gangguan](asset/9_1.png)
+
+*Gambar 9.1. Kondisi alamat dan DNS Ino sebelum simulasi DHCP Relay mati.*
+
+![Gambar 9.2 — DHCP Relay dijalankan kembali pada Jichi](asset/9_2.png)
+
+*Gambar 9.2. Pemulihan layanan DHCP Relay menggunakan script Soal 9.*
+
+![Gambar 9.3 — DHCP gagal saat relay mati dan berhasil setelah pulih](asset/9_3.png)
+
+*Gambar 9.3. Perbandingan permintaan DHCP sebelum dan sesudah DHCP Relay dipulihkan.*
+
+**Kesimpulan:** Gangguan DHCP pada klien lintas subnet berhasil direproduksi dan diatasi melalui pemulihan DHCP Relay.
+
+---
+
+## Soal 10 — Autorecovery Konfigurasi Jaringan dan DHCP
+
+### Tujuan
+
+Mengotomatisasi pemulihan konfigurasi routing dan layanan DHCP setelah node Jichi atau Tengen direstart, sehingga layanan tidak perlu diaktifkan secara manual setiap kali container hidup kembali.
+
+### Implementasi
+
+Script `/root/soal_10.sh` dibuat pada **Jichi** dan **Tengen**, kemudian dipanggil melalui `/root/init.sh` yang dapat dijalankan oleh mekanisme inisialisasi container DebiNet. Pada Jichi, pemulihan mencakup IP interface, `ip_forward`, NAT, dan DHCP Relay. Pada Tengen, pemulihan mencakup IP server serta layanan DHCP.
+
+Pengujian dilakukan dengan me-restart kedua node secara terpisah dan memeriksa konfigurasi setelah node kembali aktif.
+
+Contoh perintah verifikasi:
+
+```bash
+cat /root/soal_10.log
+ip -br -4 addr
+ip route
+cat /proc/sys/net/ipv4/ip_forward
+iptables -t nat -L POSTROUTING -n -v
+service isc-dhcp-relay status
+# Di masing-masing klien:
+udhcpc -i eth0 -n -q
+```
+
+### Hasil dan analisis
+
+Log inisialisasi Jichi memperlihatkan pemulihan IP `eth0` melalui DHCP, status forwarding, dan konfigurasi relay. Setelah restart, IP Jichi untuk Network 1–4 tetap sesuai dan default route kembali tersedia. Di Tengen, log pemulihan memperlihatkan pemanggilan konfigurasi DHCP, pembaruan reservasi Kugisaki, dan status layanan `dhcpd is running`. Validasi `dhcpd -4 -t` berhasil; kelas/pool DHCP dan alamat DNS juga kembali ada pada konfigurasi. Uji DHCP pada Itadori, Zenin, Ino, Miwa, dan Kugisaki menunjukkan server Tengen kembali melayani permintaan; Kugisaki tetap memperoleh alamat reservasi `192.243.3.99`.
+
+![Gambar 10.1 — Log autorecovery Jichi](asset/10_1.png)
+
+*Gambar 10.1. Log pemulihan konfigurasi jaringan, IP forwarding, dan layanan DHCP Relay pada Jichi.*
+
+![Gambar 10.2 — IP dan routing Jichi setelah restart](asset/10_2.png)
+
+*Gambar 10.2. Alamat antarmuka serta tabel rute Jichi setelah container diaktifkan kembali.*
+
+![Gambar 10.3 — IP forwarding, NAT, dan internet Jichi](asset/10_3.png)
+
+*Gambar 10.3. Bukti nilai `ip_forward=1`, aturan NAT masquerade, serta konektivitas internet Jichi.*
+
+![Gambar 10.4 — Log autorecovery Tengen](asset/10_4.png)
+
+*Gambar 10.4. Log `/root/soal_10.log` menunjukkan tahapan pemulihan DHCP Server, konfigurasi pool, dan reservasi Kugisaki pada Tengen.*
+
+![Gambar 10.5 — Status DHCP Server setelah pemulihan](asset/10_5.png)
+
+*Gambar 10.5. IP Tengen `192.243.4.10/24`, layanan `dhcpd is running`, dan validasi konfigurasi DHCP.*
+
+![Gambar 10.6 — Pemeriksaan pool DHCP Tengen](asset/10_6.png)
+
+*Gambar 10.6. Pemeriksaan kelas dev, support, short-lease, long-lease, alamat DNS, rentang pool, serta `fixed-address` pada `dhcpd.conf`.*
+
+![Gambar 10.7 — Verifikasi klien dan relay pasca pemulihan](asset/10_7.png)
+
+*Gambar 10.7. Pengujian ulang DHCP pada Itadori, Zenin, Ino, Kugisaki, Miwa, dan status DHCP Relay Jichi.*
+
+![Gambar 10.8 — Konektivitas serta validasi alamat reservasi](asset/10_8.png)
+
+*Gambar 10.8. Verifikasi komunikasi antarjaringan, DNS klien, serta identitas MAC address yang digunakan oleh reservasi Kugisaki.*
+
+**Kesimpulan:** Autorecovery Jichi dan Tengen bekerja pada pengujian restart yang dilakukan. Cakupan otomasi ini hanya kedua node tersebut; server lain yang ter-reset tidak otomatis ikut dipulihkan.
+
+---
+
+## Soal 11 — Konfigurasi DNS Master dan DNS Slave
+
+### Tujuan
+
+Membangun DNS *authoritative* untuk zona **`jujutsu.k64.com`** dengan **Utahime** sebagai DNS Master dan **Shoko** sebagai DNS Slave. Mekanisme transfer zona digunakan agar perubahan pada master dapat tersinkronisasi ke slave.
+
+### Implementasi
+
+BIND9 dikonfigurasi pada Utahime (`192.243.1.2`) dan Shoko (`192.243.1.3`) menggunakan script `/root/soal_11.sh` pada masing-masing node. Zona master disimpan dalam `/etc/bind/db.jujutsu.k64.com`, sedangkan berkas hasil transfer zona slave berada pada `/var/cache/bind/db.jujutsu.k64.com`. Akses transfer dari master dibatasi ke alamat IP Shoko.
+
+Potongan konfigurasi DNS Master di Utahime:
+
+```conf
+zone "jujutsu.k64.com" {
+    type master;
+    file "/etc/bind/db.jujutsu.k64.com";
+    allow-transfer { 192.243.1.3; };
+    also-notify { 192.243.1.3; };
+    notify yes;
+};
+```
+
+Potongan konfigurasi DNS Slave di Shoko:
+
+```conf
+zone "jujutsu.k64.com" {
+    type slave;
+    file "/var/cache/bind/db.jujutsu.k64.com";
+    masters { 192.243.1.2; };
+    allow-notify { 192.243.1.2; };
+};
+```
+
+Zona memiliki NS `ns1.jujutsu.k64.com` (`192.243.1.2`) dan `ns2.jujutsu.k64.com` (`192.243.1.3`). Validasi konfigurasi dilakukan menggunakan `named-checkconf` dan `named-checkzone`, disusul pengujian query langsung ke masing-masing server DNS.
+
+```bash
+# Pada Utahime
+named-checkconf
+named-checkzone jujutsu.k64.com /etc/bind/db.jujutsu.k64.com
+service named status
+
+dig @192.243.1.2 ns1.jujutsu.k64.com A +short
+dig @192.243.1.2 jujutsu.k64.com SOA +short
+
+# Validasi dari sisi Slave
+dig @192.243.1.3 ns1.jujutsu.k64.com A +short
+dig @192.243.1.3 jujutsu.k64.com SOA +short
+```
+
+### Pengujian dan hasil
+
+Pengujian awal menunjukkan `bind is running` pada kedua server. Resolusi record `ns1.jujutsu.k64.com` melalui master dan slave sama-sama menghasilkan alamat **`192.243.1.2`**. Pada pemeriksaan SOA awal, master dan slave sama-sama menampilkan serial `2026101401`.
+
+Selanjutnya, serial zona di Utahime dinaikkan dari **`2026101401` menjadi `2026101402`** lalu dilakukan `rndc reload jujutsu.k64.com`. Setelah reload, query SOA dari master (`192.243.1.2`) dan slave (`192.243.1.3`) menunjukkan **serial yang sama, `2026101402`**. Kesesuaian serial tersebut menjadi bukti bahwa perubahan zona telah tersinkronisasi dari Utahime ke Shoko pada saat pengujian.
+
+| Pengujian | Hasil pengamatan |
+|---|---|
+| Layanan BIND9 Utahime | `bind is running` |
+| Layanan BIND9 Shoko | `bind is running` |
+| A record `ns1` via Utahime | `192.243.1.2` |
+| A record `ns1` via Shoko | `192.243.1.2` |
+| Serial SOA sebelum pembaruan | `2026101401` pada master dan slave |
+| Serial SOA setelah pembaruan | **`2026101402`** pada master dan slave |
+
+![Gambar 11.1 — Pengujian DNS Master Utahime](asset/11_1.png)
+
+*Gambar 11.1. Script DNS Master dijalankan pada Utahime, layanan BIND aktif, sintaks zona valid, dan query A/SOA dapat dijawab.*
+
+![Gambar 11.2 — Pengujian DNS Slave Shoko](asset/11_2.png)
+
+*Gambar 11.2. Layanan DNS Slave aktif, file transfer zona tersedia pada `/var/cache/bind/`, serta query A dan SOA berhasil.*
+
+![Gambar 11.3 — Sinkronisasi serial zona Master dan Slave](asset/11_3.png)
+
+*Gambar 11.3. Setelah serial zona dinaikkan ke `2026101402` dan zona dimuat ulang, master dan slave menampilkan serial SOA yang sama.*
+
+**Kesimpulan:** Konfigurasi DNS Master–Slave berhasil dijalankan dan sinkronisasi transfer zona dibuktikan dengan perubahan serial SOA dari `2026101401` menjadi `2026101402` pada kedua server. Bukti ini berasal dari sesi pengujian saat layanan BIND berjalan; tidak dimaksudkan sebagai bukti bahwa layanan tetap aktif setelah restart container di sesi berbeda.
 
 ---
 
@@ -856,3 +1244,121 @@ Saat Nanami dan Todo tidak dapat melayani request, respons seharusnya berasal da
 ### Dokumentasi
 ![Soal 18](asset/18-2.png)  
 ![Soal 18](asset/18-1.png)  
+
+## Soal 19 — Nginx Proxy Caching dan Rate Limiting pada Gojo
+
+### Tujuan
+
+Menerapkan cache untuk halaman frontend selama **10 menit**, menambahkan header **`X-Cache-Status`**, serta menerapkan batas **10 request/detik per IP** pada endpoint `/api`.
+
+### Implementasi
+
+Gojo menjalankan Nginx sebagai reverse proxy. Lokasi `/` diarahkan ke backend frontend Maki dan Panda, sedangkan `/api` diteruskan menuju Geto. Header IP asli klien (`X-Real-IP`, `X-Forwarded-For`) tetap diteruskan. Konfigurasi Soal 19 disimpan dalam `/root/soal_19.sh`.
+
+Potongan konfigurasi yang diterapkan:
+
+```nginx
+# Konteks http:
+proxy_cache_path /var/cache/nginx/jujutsu levels=1:2
+                 keys_zone=jujutsu_cache:10m max_size=100m
+                 inactive=10m use_temp_path=off;
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+# Lokasi /api:
+limit_req zone=api_limit burst=5 nodelay;
+limit_req_status 429;
+
+# Lokasi /:
+proxy_cache jujutsu_cache;
+proxy_cache_valid 200 10m;
+proxy_cache_lock on;
+add_header X-Cache-Status $upstream_cache_status always;
+```
+
+### Pengujian dan hasil
+
+Pengujian dilakukan dengan URL baru agar cache belum terisi. Tiga request ke URL yang sama menghasilkan:
+
+| Request | Status HTTP | Header `X-Cache-Status` |
+|---|---|---|
+| Pertama | 200 | `MISS` |
+| Kedua | 200 | `HIT` |
+| Ketiga | 200 | `HIT` |
+
+Endpoint `/api` diuji dalam keadaan normal dan merespons HTTP 200 dari worker API. Selanjutnya, **50 request paralel** digunakan untuk mengamati rate limit. Hasilnya adalah **7 respons HTTP 200** dan **43 respons HTTP 429**.
+
+![Gambar 19.1 — Penerapan konfigurasi Nginx](asset/19_1.png)
+
+*Gambar 19.1. Script Soal 19 berhasil diterapkan dan `nginx -t` valid.*
+
+![Gambar 19.2 — Pembuktian MISS kemudian HIT](asset/19_2.png)
+
+*Gambar 19.2. Respons pertama mengambil konten dari upstream (MISS), sedangkan request berikutnya menggunakan cache (HIT).*
+
+![Gambar 19.3 — Respons API dan rate limiting](asset/19_3.png)
+
+*Gambar 19.3. API berhasil melayani request normal; request beruntun yang melebihi batas ditolak HTTP 429.*
+
+**Kesimpulan:** Proxy caching dengan masa berlaku 10 menit dan rate limiting sebesar 10 request/detik/IP berhasil dikonfigurasi dan terbukti melalui pengujian.
+
+---
+
+## Soal 20 — Audit Performa Web dan API Menggunakan Apache Benchmark
+
+### Tujuan
+
+Menguji kapasitas layanan menggunakan Apache Benchmark (`ab`) dari Kusakabe, dengan total **600 request** dan tingkat konkurensi **30**. Pengujian mencakup halaman frontend serta API pada kondisi rate limit **OFF** dan **ON**. Access log Gojo digunakan untuk membedakan penolakan kebijakan (HTTP 429) dari kegagalan aplikasi/koneksi.
+
+### Implementasi
+
+Apache Benchmark dipasang pada klien Alpine Kusakabe menggunakan `apk add apache2-utils`. Domain `jujutsu.k64.com` sementara dipetakan ke IP Gojo `192.243.1.4` melalui `/etc/hosts` ketika server DNS sedang tidak tersedia, sehingga pengujian masih memakai nama host yang sama. Pemetaannya hanya untuk keperluan akses host pada pengujian Soal 20, bukan bukti bahwa DNS Master–Slave telah hidup kembali setelah restart. Hasil disimpan dalam `/root/soal_20_web.txt`, `/root/soal_20_api_off.txt`, dan `/root/soal_20_api_on.txt`; otomatisasi perintah tersimpan sebagai `/root/soal_20.sh`.
+
+```bash
+ab -l -n 600 -c 30 http://jujutsu.k64.com/
+# Saat rate limiting dinonaktifkan sementara pada Gojo:
+ab -l -n 600 -c 30 'http://jujutsu.k64.com/api?soal20=off'
+# Setelah rate limiting Gojo diaktifkan kembali:
+ab -l -n 600 -c 30 'http://jujutsu.k64.com/api?soal20=on'
+```
+
+Pembatasan request hanya dinonaktifkan selama pengambilan baseline. Setelah baseline selesai, konfigurasi aktif Soal 19 dikembalikan dan `nginx -t` serta reload berhasil.
+
+### Hasil benchmark
+
+| Metrik | Frontend `/` | API rate limit OFF | API rate limit ON |
+|---|---:|---:|---:|
+| Jumlah request | 600 | 600 | 600 |
+| Concurrency | 30 | 30 | 30 |
+| Requests per second | **4963,72** | **451,80** | **3851,51** |
+| Time per request (mean) | **6,044 ms** | **66,401 ms** | **7,789 ms** |
+| P95 latensi | **8 ms** | **117 ms** | **9 ms** |
+| Failed requests (`ab`) | **0** | **0** | **0** |
+| Non-2xx responses | tidak tercatat | tidak tercatat | **593** |
+| Respons HTTP 200 dari log Gojo | — | **600** | **7** |
+| Respons HTTP 429 dari log Gojo | — | **0** | **593** |
+
+Angka *Requests per second* pada API rate limit ON terlihat lebih besar dibandingkan OFF, **bukan berarti backend API memproses lebih banyak request berhasil**. Sebagian besar request ditolak lebih cepat oleh Nginx dengan HTTP 429 tanpa diteruskan ke backend. `Failed requests: 0` merupakan indikator kegagalan menurut ApacheBench, sedangkan **593 respons HTTP 429** tercatat sebagai `Non-2xx responses`; keduanya tidak bertentangan.
+
+![Gambar 20.1 — Benchmark frontend](asset/20_1.png)
+
+*Gambar 20.1. Benchmark 600 request, concurrency 30, RPS 4963,72, latensi mean 6,044 ms, dan failed requests 0.*
+
+![Gambar 20.2 — Benchmark API saat rate limiting OFF](asset/20_2.png)
+
+*Gambar 20.2. RPS 451,80 dan latensi mean 66,401 ms ketika seluruh request diterima backend.*
+
+![Gambar 20.3 — Benchmark API saat rate limiting ON](asset/20_3.png)
+
+*Gambar 20.3. RPS 3851,51, latensi mean 7,789 ms, dan 593 respons Non-2xx.*
+
+![Gambar 20.4 — Analisis status log Gojo](asset/20_4.png)
+
+*Gambar 20.4. Tanpa rate limit terdapat 600 respons 200; dengan rate limit terdapat 7 respons 200 dan 593 respons 429, dan aturan limit telah aktif kembali.*
+
+### Analisis kegagalan
+
+Dari akses log pengujian API, tidak ditemukan respons HTTP 500, 502, atau 504 pada request yang diberi penanda `soal20=off` dan `soal20=on`. Semua 593 respons Non-2xx yang tercatat pada pengujian ON berupa **HTTP 429**, sehingga diklasifikasikan sebagai **penolakan oleh kebijakan rate limiting**, bukan kegagalan proses aplikasi atau masalah koneksi upstream pada hasil pengujian ini.
+
+**Kesimpulan:** Apache Benchmark berhasil memberikan metrik kapasitas frontend/API. Pengujian membuktikan bahwa pembatasan 10 request/detik/IP mengurangi request berlebihan yang mencapai API; HTTP 429 muncul sesuai kebijakan dan status layanan Soal 19 dikembalikan setelah pengujian.
+
+---
