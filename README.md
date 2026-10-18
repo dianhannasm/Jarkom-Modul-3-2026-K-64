@@ -200,7 +200,6 @@ Jika lease details tersedia pada klien, periksa nilai `lease time`. Ino dan Kusa
 
 ### Dokumentasi
 ![Soal 5](asset/05-1.png)  
-![Soal 5](asset/05-2.png)  
 ![Soal 5](asset/05-3.png)  
 ![Soal 5](asset/05-4.png)   
 ![Soal 5](asset/05-5.png)  
@@ -596,7 +595,6 @@ SELECT * FROM db_shibuya_k64.request_logs ORDER BY id DESC LIMIT 10;
 ![Soal 14](asset/14-3.png)  
 ![Soal 14](asset/14-4.png)  
 ![Soal 14](asset/14-5.png)  
-- [Masukkan screenshot respons JSON API dan data request terbaru pada tabel `request_logs` di Yaga di sini.]
 
 ---
 
